@@ -990,9 +990,10 @@ bool alpacaTelescopeDriver::sendAlpacaPUT(const std::string& endpoint, const nlo
     {
         // Some Alpaca devices (like Seestar) close connection immediately after
         // receiving /slewtotarget command. Log as debug instead of error.
-        if (endpoint == "/slewtotarget")
+        if (endpoint == "/slewtotarget" && result.error() == httplib::Error::ConnectionClosed)
         {
             LOGF_DEBUG("PUT %s: connection closed (expected for some devices)", endpoint.c_str());
+            return true;
         }
         else
         {
