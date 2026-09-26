@@ -21,6 +21,7 @@
 #pragma once
 
 #include <inditelescope.h>
+#include <indiguiderinterface.h>
 #include <memory>
 #include <vector>
 #include <httplib.h>
@@ -31,7 +32,7 @@
 #include <indijson.hpp>
 #endif
 
-class alpacaTelescopeDriver : public INDI::Telescope
+class alpacaTelescopeDriver : public INDI::Telescope, public INDI::GuiderInterface
 {
     public:
         alpacaTelescopeDriver();
@@ -43,6 +44,7 @@ class alpacaTelescopeDriver : public INDI::Telescope
         virtual bool Connect() override;
         virtual bool Disconnect() override;
         virtual bool ReadScopeStatus() override;
+        virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
 
     protected:
         // Connection
@@ -66,6 +68,12 @@ class alpacaTelescopeDriver : public INDI::Telescope
         // Motion Control
         virtual bool MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command) override;
         virtual bool MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command) override;
+
+        // Guiding
+        virtual IPState GuideNorth(uint32_t ms) override;
+        virtual IPState GuideSouth(uint32_t ms) override;
+        virtual IPState GuideEast(uint32_t ms) override;
+        virtual IPState GuideWest(uint32_t ms) override;
 
         // Save configuration
         virtual bool saveConfigItems(FILE *fp) override;
@@ -92,6 +100,7 @@ class alpacaTelescopeDriver : public INDI::Telescope
 
         // Async slew support: prefer /slewtotargetasync over the blocking /slewtotarget
         bool m_CanSlewAsync{false};
+        bool m_CanPulseGuide{false};
 
         // Track modes: maps an index in TrackModeSP to the corresponding Alpaca
         // DriveRate value (0=Sidereal, 1=Lunar, 2=Solar, 3=King) reported by /trackingrates
@@ -103,6 +112,7 @@ class alpacaTelescopeDriver : public INDI::Telescope
 
         // used by GoTo and Park
         void StartSlew(double ra, double dec, TelescopeStatus status);
+        IPState PulseGuide(int direction, INDI_EQ_AXIS axis, uint32_t duration);
 
         unsigned int DBG_SCOPE { 0 };
 

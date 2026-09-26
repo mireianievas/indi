@@ -20,6 +20,7 @@
 
 #include "indi_alpaca_telescope.h"
 #include <connectionplugins/connectiontcp.h>
+#include <inditimer.h>
 #include <memory>
 #include <cstring>
 #include <cmath>
@@ -32,7 +33,7 @@ std::unique_ptr<alpacaTelescopeDriver> alpaca(new alpacaTelescopeDriver());
 #define RA_AXIS     0
 #define DEC_AXIS    1
 
-alpacaTelescopeDriver::alpacaTelescopeDriver()
+alpacaTelescopeDriver::alpacaTelescopeDriver() : INDI::GuiderInterface(this)
 {
     DBG_SCOPE = static_cast<uint32_t>(INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE"));
 
@@ -70,6 +71,8 @@ bool alpacaTelescopeDriver::initProperties()
     DeviceInfoTP[INTERFACE_VERSION].fill("INTERFACE_VERSION", "Interface Version", "");
     DeviceInfoTP.fill(getDeviceName(), "DEVICE_INFO", "Device Info", OPTIONS_TAB, IP_RO, 60, IPS_IDLE);
 
+    INDI::GuiderInterface::initProperties(GUIDE_TAB);
+
     SetParkDataType(PARK_RA_DEC);
 
     // RA is a rotating frame, while HA or Alt/Az is not
@@ -88,6 +91,9 @@ bool alpacaTelescopeDriver::updateProperties()
     if (isConnected())
     {
         defineProperty(DeviceInfoTP);
+
+        if (m_CanPulseGuide)
+            INDI::GuiderInterface::updateProperties();
 
         if (InitPark())
         {
@@ -108,6 +114,7 @@ bool alpacaTelescopeDriver::updateProperties()
     else
     {
         deleteProperty(DeviceInfoTP);
+        INDI::GuiderInterface::updateProperties();
     }
 
     return true;
@@ -319,6 +326,18 @@ bool alpacaTelescopeDriver::Handshake()
         LOG_WARN("Failed to query tracking capability from device");
     }
 
+    m_CanPulseGuide = sendAlpacaGET("/canpulseguide", response) && response.contains("Value")
+                      && response["Value"].get<bool>();
+    if (m_CanPulseGuide)
+    {
+        setDriverInterface(getDriverInterface() | GUIDER_INTERFACE);
+        LOG_INFO("Telescope supports Alpaca pulse guiding");
+    }
+    else
+    {
+        LOG_INFO("Telescope does not support Alpaca pulse guiding");
+    }
+
     // Query whether the mount supports the non-blocking slewtotargetasync/slewtoaltazasync
     // commands. If not, fall back to the blocking slewtotarget/slewtoaltaz commands.
     if (sendAlpacaGET("/canslewasync", response) && response.contains("Value"))
@@ -505,6 +524,55 @@ bool alpacaTelescopeDriver::ReadScopeStatus()
         TrackState = SCOPE_IDLE;
 
     return true;
+}
+
+bool alpacaTelescopeDriver::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+    if (INDI::GuiderInterface::processNumber(dev, name, values, names, n))
+        return true;
+
+    return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
+}
+
+IPState alpacaTelescopeDriver::PulseGuide(int direction, INDI_EQ_AXIS axis, uint32_t duration)
+{
+    if (!m_CanPulseGuide || !httpClient || duration == 0)
+        return IPS_ALERT;
+
+    nlohmann::json request, response;
+    request["Direction"] = direction;
+    request["Duration"] = duration;
+    if (!sendAlpacaPUT("/pulseguide", request, response))
+    {
+        LOGF_ERROR("Failed to pulse guide direction %d for %u ms", direction, duration);
+        return IPS_ALERT;
+    }
+
+    INDI::Timer::singleShot(duration, [this, axis]()
+    {
+        GuideComplete(axis);
+    });
+    return IPS_BUSY;
+}
+
+IPState alpacaTelescopeDriver::GuideNorth(uint32_t ms)
+{
+    return PulseGuide(0, AXIS_DE, ms);
+}
+
+IPState alpacaTelescopeDriver::GuideSouth(uint32_t ms)
+{
+    return PulseGuide(1, AXIS_DE, ms);
+}
+
+IPState alpacaTelescopeDriver::GuideEast(uint32_t ms)
+{
+    return PulseGuide(2, AXIS_RA, ms);
+}
+
+IPState alpacaTelescopeDriver::GuideWest(uint32_t ms)
+{
+    return PulseGuide(3, AXIS_RA, ms);
 }
 
 bool alpacaTelescopeDriver::Goto(double ra, double dec)
